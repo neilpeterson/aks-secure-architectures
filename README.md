@@ -1,13 +1,10 @@
 Bicep deployment for building a secure and scalable private AKS cluster with the following capabilities.
 
-- Private AKS cluster built with Azure Linux (Mariner).
+- Private AKS cluster built on Azure Linux (Mariner) with Azure RBAC for cluster access.
 - HUB VNET for management access (Bastion) and Egress firewall / Spoke VNETS for each cluster deployment.
-- Azure RBAC for cluster access.
 - Connection to ACR and Key Vault over private link.
 - Application Gateway Ingress Controller (AGIC), NGINX alternate found in this branch (link), Application Gateway for Containers under development.
-- POD enabled workload and CSI driver for Key Vault.
-- Azure Policy / OPA Gatekeeper policy enabled.
-- Container insights enabled.
+- POD workload identity, CSI driver for Key Vault, Azure Policy / OPA Gatekeeper, and container insights enabled.
 
 A few things are still in progress (egress, SSL validation, and code optimization).
 
