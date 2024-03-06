@@ -58,3 +58,15 @@ az deployment group create --template-file ./cluster-deployment/spoke-network-an
 ```
 az deployment group create --template-file ./cluster-deployment/aks-cluster.bicep --parameters ./parameters/lab-deployment/aks-cluster.bicepparam -g aks-cluster-one
 ```
+
+### Prepare workload identity and APPGW certificate (move to Bicep)
+
+Update service account with workload identity client id.
+
+```
+kubectl apply -f ./sample-workload/service-account.yaml
+```
+
+E2E TLS still not working. Let's walk through this:
+
+https://azure.github.io/application-gateway-kubernetes-ingress/tutorials/tutorial.e2e-ssl/
