@@ -7,6 +7,8 @@ param LOG_ANALYTICS_WORKSPACE_NAME string
 param LOCATION string = resourceGroup().location
 param VIRTUAL_NETWORK_NAME string
 
+param APPGatewayE2ETLS bool = false
+
 resource virtualNetwork 'Microsoft.Network/virtualNetworks@2021-05-01' existing = {
   name: VIRTUAL_NETWORK_NAME
 }
@@ -63,7 +65,6 @@ resource clusterAdminRole 'Microsoft.Authorization/roleDefinitions@2018-01-01-pr
   scope: subscription()
 }
 
-// resource clusterAdminRoleAssignment 'Microsoft.Authorization/roleAssignments@2020-10-01-preview' = if (isUsingAzureRBACasKubernetesRBAC) {
 resource clusterAdminRoleAssignment 'Microsoft.Authorization/roleAssignments@2020-10-01-preview' = {
   scope: AKSCluster
   name: guid('microsoft-entra-admin-group', AKSCluster.id, AKS_CONFIG_PARAM.AKS_ENTRA_ADMIN_GROUP)
@@ -82,7 +83,6 @@ resource serviceClusterUserRole 'Microsoft.Authorization/roleDefinitions@2018-01
   scope: subscription()
 }
 
-// resource serviceClusterUserRoleAssignment 'Microsoft.Authorization/roleAssignments@2020-10-01-preview' = if (isUsingAzureRBACasKubernetesRBAC) {
 resource serviceClusterUserRoleAssignment 'Microsoft.Authorization/roleAssignments@2020-10-01-preview' = {
   scope: AKSCluster
   name: guid('microsoft-entra-admin-group-sc', AKSCluster.id, AKS_CONFIG_PARAM.AKS_ENTRA_ADMIN_GROUP)
@@ -196,12 +196,6 @@ resource AKSCluster 'Microsoft.ContainerService/managedClusters@2023-02-02-previ
           enableSecretRotation: 'false'
         }
       }
-      ingressApplicationGateway: {
-        config: {
-          applicationGatewayId: applicationGateway.id
-        }
-        enabled: true
-      }
     }
     nodeResourceGroup: '${resourceGroup().name}-nodes'
     enableRBAC: true
@@ -302,6 +296,11 @@ resource AKSCluster 'Microsoft.ContainerService/managedClusters@2023-02-02-previ
       enabled: true
     }
     enableNamespaceResources: false
+    ingressProfile: {
+      webAppRouting: {
+        enabled: false
+      }
+    }
   }
   identity: {
     type: 'UserAssigned'
@@ -326,6 +325,24 @@ resource cluaterACRAccess 'Microsoft.Authorization/roleAssignments@2020-10-01-pr
   properties: {
     roleDefinitionId: ACRPullRole.id
     description: 'Allows AKS to pull container images from this ACR instance.'
+    principalId: AKSCluster.properties.identityProfile.kubeletidentity.objectId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource networkReaderRole 'Microsoft.Authorization/roleDefinitions@2018-01-01-preview' existing = {
+  name: 'b24988ac-6180-42a0-ab88-20f7382dd24c'
+  scope: subscription()
+}
+
+// Need read on the vnet for NGINX service TODO - verify further.
+// Contrbutor access on the whoel vnet
+resource cluaterNestorkAccess 'Microsoft.Authorization/roleAssignments@2020-10-01-preview' = {
+  scope: virtualNetwork
+  name: guid(clusterIdentity.id, AKSInternalLBSubnet.id)
+  properties: {
+    roleDefinitionId: networkReaderRole.id
+    description: 'Allows AKS to reade internal lb subnet for NGINX / Inernal LB config.'
     principalId: AKSCluster.properties.identityProfile.kubeletidentity.objectId
     principalType: 'ServicePrincipal'
   }
@@ -386,7 +403,7 @@ module ingressIdentityAKVAccess 'modules/key-vault-access.bicep' = {
 }
 
 // User Managed Identity that App Gateway is assigned. Used for Azure Key Vault Access.
-resource appGatewayIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2018-11-30' = {
+resource applicationGatewayIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2018-11-30' = {
   name: 'application-gateway'
   location: LOCATION
 }
@@ -440,8 +457,8 @@ module appGatewayKeyVaultAccess 'modules/key-vault-access.bicep' = {
   scope: resourceGroup(KEY_VAULT.RESOURCE_GROUP_NAME)
   params: {
     keyVaultName: keyVault.name
-    miAppGatewayPrincipalId: appGatewayIdentity.properties.principalId
-    identityName: appGatewayIdentity.name
+    miAppGatewayPrincipalId: applicationGatewayIdentity.properties.principalId
+    identityName: applicationGatewayIdentity.name
   }
 }
 
@@ -451,7 +468,7 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2021-05-01' =
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {
-      '${appGatewayIdentity.id}': {}
+      '${applicationGatewayIdentity.id}': {}
     }
   }
   zones: pickZones('Microsoft.Network', 'applicationGateways', LOCATION, 3)
@@ -468,6 +485,16 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2021-05-01' =
       ]
       minProtocolVersion: 'TLSv1_2'
     }
+    // TODO - do I need this, or is this only needed when using self signed certs?
+    // trustedRootCertificates: [
+    //   {
+    //     name: 'root-cert-wildcard-aks-ingress'
+    //     properties: {
+    //       // keyVaultSecretId: aksIngressCertificate.properties.secretUri
+    //       keyVaultSecretId: kvsAppGwIngressInternalAksIngressTls.properties.secretUri
+    //     }
+    //   }
+    // ]
     gatewayIPConfigurations: [
       {
         name: 'apw-ip-configuration'
@@ -513,21 +540,55 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2021-05-01' =
         }
       }
     ]
-    probes: []
+    probes: [
+      {
+        name: AKS_CONFIG_PARAM.INGRESS_BACKEND_DOMAIN
+        properties: {
+          protocol: (APPGatewayE2ETLS ? 'Https' : 'Http')
+          path: '/'
+          interval: 30
+          timeout: 30
+          unhealthyThreshold: 3
+          pickHostNameFromBackendHttpSettings: true
+          minServers: 0
+          match: {}
+        }
+      }
+    ]
+
+    // adminGroupObjectIDs: ((!isUsingAzureRBACasKubernetesRBAC) ? array(clusterAdminMicrosoftEntraGroupObjectId) : [])
     backendAddressPools: [
       {
-        name: 'bicep-deployment-requires-backend-pool'
+        name: AKS_CONFIG_PARAM.INGRESS_BACKEND_DOMAIN
+        properties: {
+          backendAddresses: [
+            {
+              // fqdn: AKS_CONFIG_PARAM.INGRESS_BACKEND_DOMAIN
+              fqdn: (APPGatewayE2ETLS) ? 'AKS_CONFIG_PARAM.INGRESS_BACKEND_DOMAIN' : '10.240.4.4'
+            }
+          ]
+        }
       }
     ]
     backendHttpSettingsCollection: [
       {
         name: 'aks-ingress-backendpool-httpsettings'
         properties: {
-          port: 443
-          protocol: 'Https'
+          // port: 443
+          // protocol: 'Https'
+          port: (APPGatewayE2ETLS ? 443 : 80)
+          protocol: (APPGatewayE2ETLS ? 'Https' : 'Http')
           cookieBasedAffinity: 'Disabled'
           pickHostNameFromBackendAddress: true
           requestTimeout: 20
+          probe: {
+            id: resourceId('Microsoft.Network/applicationGateways/probes', APPLICATION_GATEWAY.NAME, AKS_CONFIG_PARAM.INGRESS_BACKEND_DOMAIN)
+          }
+          // trustedRootCertificates: [
+          //   {
+          //     id: resourceId('Microsoft.Network/applicationGateways/trustedRootCertificates', applicationGatewayName, 'root-cert-wildcard-aks-ingress')
+          //   }
+          // ]
         }
       }
     ]
@@ -560,7 +621,7 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2021-05-01' =
             id: resourceId('Microsoft.Network/applicationGateways/httpListeners', APPLICATION_GATEWAY.NAME, 'listener-https')
           }
           backendAddressPool: {
-            id: resourceId('Microsoft.Network/applicationGateways/backendAddressPools', APPLICATION_GATEWAY.NAME, 'bicep-deployment-requires-backend-pool')
+            id: resourceId('Microsoft.Network/applicationGateways/backendAddressPools', APPLICATION_GATEWAY.NAME, AKS_CONFIG_PARAM.INGRESS_BACKEND_DOMAIN)
           }
           backendHttpSettings: {
             id: resourceId('Microsoft.Network/applicationGateways/backendHttpSettingsCollection', APPLICATION_GATEWAY.NAME, 'aks-ingress-backendpool-httpsettings')
@@ -572,20 +633,4 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2021-05-01' =
   dependsOn: [
     appGatewayKeyVaultAccess
   ]
-}
-
-resource Contributor 'Microsoft.Authorization/roleDefinitions@2018-01-01-preview' existing = {
-  name: 'b24988ac-6180-42a0-ab88-20f7382dd24c'
-  scope: subscription()
-}
-
-// TODO - should be able to squeese this down a bit, no?
-resource appGwContributorRoleAssignment 'Microsoft.Authorization/roleAssignments@2020-04-01-preview' = {
-  name: guid(applicationGateway.id, containerRegistry.id, 'agic')
-  properties: {
-    roleDefinitionId: Contributor.id
-    principalId: AKSCluster.properties.addonProfiles.ingressApplicationGateway.identity.objectId
-    principalType: 'ServicePrincipal'
-    scope: resourceGroup().id
-  }
 }

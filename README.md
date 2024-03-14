@@ -12,7 +12,7 @@ A few things are still in progress (egress, SSL validation, and code optimizatio
 
 ## Prerequisites
 
-Create SSL certificates for the Application Gateway Ingress Controller prior to deployment. Update the three parameter files per your environment.
+An Azure Key Vatul with SSL certificates for both Application gateway and NGINX SSL certificates ([App Gateway End to End TLS](https://learn.microsoft.com/en-us/azure/application-gateway/ssl-overview#end-to-end-tls-encryption)). Key Vault also needs a secret for the Windows Jumpbox password.
 
 ## Prepare Entra groups and users
 
@@ -59,6 +59,13 @@ az deployment group create --template-file ./cluster-deployment/spoke-network-an
 az deployment group create --template-file ./cluster-deployment/aks-cluster.bicep --parameters ./parameters/lab-deployment/aks-cluster.bicepparam -g aks-cluster-one
 ```
 
+### Install Ingress Controller (to move into template)
+
+```
+kubectl apply -f ./cluster-manifests/nginx-ingress.yaml
+kubectl apply -f ./cluster-manifests/internal-load-balancer.yaml
+```
+
 ### Prepare workload identity and APPGW certificate (move to Bicep)
 
 Update service account with workload identity client id.
@@ -70,3 +77,8 @@ kubectl apply -f ./sample-workload/service-account.yaml
 E2E TLS still not working. Let's walk through this:
 
 https://azure.github.io/application-gateway-kubernetes-ingress/tutorials/tutorial.e2e-ssl/
+
+## TODO
+
+- Configure Application Gateway for SSL Termination and End to End SSL (I think this is done, tighten up parameters).
+- I think I need to add NSG rule for both the ILB and the nodes?

@@ -36,6 +36,8 @@ resource snetClusterNodesMiClusterControlPlaneNetworkContributorRole_roleAssignm
   }
 }
 
+// TODO - it seems this is not working when trying to create an internal load balancer
+// TODO - could quick give access to network and TS later
 resource snetClusterIngressServicesMiClusterControlPlaneSecretsUserRole_roleAssignment 'Microsoft.Authorization/roleAssignments@2020-10-01-preview' = {
   scope: snetClusterIngress
   name: guid(snetClusterIngress.id, networkContributorRole.id, clusterControlPlaneIdentityName)

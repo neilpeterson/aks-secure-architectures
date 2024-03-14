@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+spec:
+  selector:
+    matchLabels:
+      app: nginx
+  replicas: 2 # tells deployment to run 2 pods matching the template
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.14.2
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-deployment
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+  selector:
+    app: nginx
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nginx-deployment
+  annotations:
+spec:
+  rules:
+  - host: my-app.example.com
+    http:
+      paths:
+      - pathType: Prefix
+        path: "/"
+        backend:
+          service:
+            name: nginx-deployment
+            port:
+              number: 80
+# ---
+# apiVersion: secrets-store.csi.x-k8s.io/v1
+# kind: SecretProviderClass
+# metadata:
+#   name: azure-sync
+# spec:
+#   provider: azure
+#   secretObjects:
+#   - data:
+#     - key: username
+#       objectName: foo1
+#     secretName: foosecret
+#     type: Opaque
